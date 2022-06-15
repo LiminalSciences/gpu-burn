@@ -37,6 +37,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <map>
 #include <vector>
 #include <sys/types.h>
@@ -127,8 +128,8 @@ bool g_running = false;
 
 template <class T> class GPU_Test {
 	public:
-	GPU_Test(int dev, bool doubles, bool tensors) : 
-			d_devNumber(dev), d_doubles(doubles), d_tensors(tensors) {
+	GPU_Test(int dev, bool doubles, bool tensors, std::string cwd) : 
+			d_devNumber(dev), d_doubles(doubles), d_tensors(tensors), cwd_(std::move(cwd)) {
 		checkError(cuDeviceGet(&d_dev, d_devNumber));
 		checkError(cuCtxCreate(&d_ctx, 0, d_dev));
 
@@ -253,12 +254,12 @@ template <class T> class GPU_Test {
 	}
 
 	void initCompareKernel() {
-		const char *kernelFile = "compare.ptx";
+		std::string kernelFile = cwd_ + "compare.ptx";
 		{
 			std::ifstream f(kernelFile);
 			checkError(f.good() ? CUDA_SUCCESS : CUDA_ERROR_NOT_FOUND, std::string("couldn't find file \"") + kernelFile + "\" from working directory");
 		}
-		checkError(cuModuleLoad(&d_module, kernelFile), "load module");
+		checkError(cuModuleLoad(&d_module, kernelFile.c_str()), "load module");
 		checkError(cuModuleGetFunction(&d_function, d_module, 
 					d_doubles ? "compareD" : "compare"), "get func");
 
@@ -305,6 +306,8 @@ template <class T> class GPU_Test {
 	int *d_faultyElemsHost;
 
 	cublasHandle_t d_cublas;
+
+	std::string cwd_;
 };
 
 // Returns the number of devices
@@ -324,10 +327,10 @@ int initCuda() {
 	return deviceCount;
 }
 
-template<class T> void startBurn(int index, int writeFd, T *A, T *B, bool doubles, bool tensors, ssize_t useBytes) {
+template<class T> void startBurn(int index, int writeFd, T *A, T *B, bool doubles, bool tensors, ssize_t useBytes, std::string cwd) {
 	GPU_Test<T> *our;
 	try {
-		our = new GPU_Test<T>(index, doubles, tensors);
+		our = new GPU_Test<T>(index, doubles, tensors, cwd);
 		our->initBuffers(A, B, useBytes);
 	} catch (std::string e) {
 		fprintf(stderr, "Couldn't init a GPU test: %s\n", e.c_str());
@@ -590,7 +593,7 @@ void listenClients(std::vector<int> clientFd, std::vector<pid_t> clientPid, int 
 		printf("\tGPU %d: %s\n", (int)i, clientFaulty.at(i) ? "FAULTY" : "OK");
 }
 
-template<class T> void launch(int runLength, bool useDoubles, bool useTensorCores, ssize_t useBytes) {
+template<class T> void launch(int runLength, bool useDoubles, bool useTensorCores, ssize_t useBytes, std::string cwd) {
 	// Initting A and B with random data
 	T *A = (T*) malloc(sizeof(T)*SIZE*SIZE);
 	T *B = (T*) malloc(sizeof(T)*SIZE*SIZE);
@@ -617,7 +620,7 @@ template<class T> void launch(int runLength, bool useDoubles, bool useTensorCore
 		int devCount = initCuda();
 		write(writeFd, &devCount, sizeof(int));
 
-		startBurn<T>(0, writeFd, A, B, useDoubles, useTensorCores, useBytes);
+		startBurn<T>(0, writeFd, A, B, useDoubles, useTensorCores, useBytes, cwd);
 
 		close(writeFd);
 		return;
@@ -644,7 +647,7 @@ template<class T> void launch(int runLength, bool useDoubles, bool useTensorCore
 					// Child
 					close(slavePipe[0]);
 					initCuda();
-					startBurn<T>(i, slavePipe[1], A, B, useDoubles, useTensorCores, useBytes);
+					startBurn<T>(i, slavePipe[1], A, B, useDoubles, useTensorCores, useBytes, cwd);
 
 					close(slavePipe[1]);
 					return;
@@ -739,6 +742,11 @@ int main(int argc, char **argv) {
             }
 		}
 	}
+	// end path where "gpu_burn" to get path only
+	char *cwd_end = strstr(argv[0], "gpu_burn");
+	if (cwd_end != NULL) {
+		*cwd_end = 0;
+	}
 	
 	if (argc-thisParam < 2)
 		printf("Run length not specified in the command line. ");
@@ -747,9 +755,9 @@ int main(int argc, char **argv) {
 	printf("Burning for %d seconds.\n", runLength);
 
 	if (useDoubles)
-		launch<double>(runLength, useDoubles, useTensorCores, useBytes);
+		launch<double>(runLength, useDoubles, useTensorCores, useBytes, std::string(argv[0]));
 	else
-		launch<float>(runLength, useDoubles, useTensorCores, useBytes);
+		launch<float>(runLength, useDoubles, useTensorCores, useBytes, std::string(argv[0]));
 
 	return 0;
 }
