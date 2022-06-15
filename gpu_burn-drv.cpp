@@ -383,8 +383,8 @@ int pollTemp(pid_t *p) {
 	if (!myPid) {
 		close(tempPipe[0]);
 		dup2(tempPipe[1], STDOUT_FILENO); // Stdout
-		execlp("nvidia-smi", "nvidia-smi", "-l", "5", "-q", "-d", "TEMPERATURE", NULL);
-		fprintf(stderr, "Could not invoke nvidia-smi, no temps available\n");
+		execlp("tegrastats", "tegrastats", "--interval", "5000", NULL);
+		fprintf(stderr, "Could not invoke tegrastats, no temps available\n");
 		
 		exit(0);
 	}
@@ -407,10 +407,21 @@ void updateTemps(int handle, std::vector<int> *temps) {
 
 	data[curPos-1] = 0;
 
-	int tempValue;
 	// FIXME: The syntax of this print might change in the future..
-	if (sscanf(data, "        GPU Current Temp            : %d C", &tempValue) == 1) {
-		//printf("read temp val %d\n", tempValue);
+	int tempValue;
+	char *gpu_temp_start;
+	char *gpu_temp_end;
+	// find beginning of GPU temp word
+	gpu_temp_start = strstr(data, "GPU@");
+	gpu_temp_end = strstr(data, "C BCPU@");
+	if (gpu_temp_start != NULL && gpu_temp_end != NULL) {
+		// find ending space for GPU measurement
+		gpu_temp_start += 4;
+		*gpu_temp_end = 0;
+	}
+	tempValue = round(atof(gpu_temp_start));
+	if (tempValue > 0) {
+		// printf("read temp val %d\n", tempValue);
 		temps->at(gpuIter) = tempValue;
 		gpuIter = (gpuIter+1)%(temps->size());
 	} else if (!strcmp(data, "        Gpu                     : N/A"))
@@ -580,8 +591,6 @@ void listenClients(std::vector<int> clientFd, std::vector<pid_t> clientPid, int 
 }
 
 template<class T> void launch(int runLength, bool useDoubles, bool useTensorCores, ssize_t useBytes) {
-	system("nvidia-smi -L");
-
 	// Initting A and B with random data
 	T *A = (T*) malloc(sizeof(T)*SIZE*SIZE);
 	T *B = (T*) malloc(sizeof(T)*SIZE*SIZE);
